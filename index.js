@@ -243,54 +243,58 @@ function runMongoMigrate(direction, migrationEnd) {
 	 */
 	function performMigration(direction, migrateTo) {
 		var db = require('./lib/db');
-		db.getConnection(dbConfig || require(cwd + path.sep + configFileName)[dbProperty], function (err, db) {
-			if (err) {
-				console.error('Error connecting to database');
-				process.exit(1);
-			}
-			var migrationCollection = db.migrationCollection,
-					dbConnection = db.connection;
-
-			migrationCollection.find({}).sort({num: -1}).limit(1).toArray(function (err, migrationsRun) {
+		if (checkDBConfigOK()) {
+			db.getConnection(dbConfig || require(cwd + path.sep + configFileName)[dbProperty], function (err, db) {
 				if (err) {
-					console.error('Error querying migration collection', err);
+					console.error('Error connecting to database');
 					process.exit(1);
 				}
+				var migrationCollection = db.migrationCollection,
+						dbConnection = db.connection;
 
-				var lastMigration = migrationsRun[0],
-					lastMigrationNum = lastMigration ? lastMigration.num : 0;
+				migrationCollection.find({}).sort({num: -1}).limit(1).toArray(function (err, migrationsRun) {
+					if (err) {
+						console.error('Error querying migration collection', err);
+						process.exit(1);
+					}
 
-				migrate({
-					migrationTitle: 'migrations/.migrate',
-					db: dbConnection,
-					migrationCollection: migrationCollection
-				});
-				migrations(direction, lastMigrationNum, migrateTo).forEach(function(path){
-					var mod = require(cwd + '/' + path);
+					var lastMigration = migrationsRun[0],
+						lastMigrationNum = lastMigration ? lastMigration.num : 0;
+
 					migrate({
-						num: parseInt(path.split('/')[1].match(/^(\d+)/)[0], 10),
-						title: path,
-						up: mod.up,
-						down: mod.down});
+						migrationTitle: 'migrations/.migrate',
+						db: dbConnection,
+						migrationCollection: migrationCollection
+					});
+					migrations(direction, lastMigrationNum, migrateTo).forEach(function(path){
+						var mod = require(cwd + '/' + path);
+						migrate({
+							num: parseInt(path.split('/')[1].match(/^(\d+)/)[0], 10),
+							title: path,
+							up: mod.up,
+							down: mod.down});
+					});
+
+					//Revert working directory to previous state
+					process.chdir(previousWorkingDirectory);
+
+					var set = migrate();
+
+					set.on('migration', function(migration, direction){
+						log(direction, migration.title);
+					});
+
+					set.on('save', function(){
+						log('migration', 'complete');
+						process.exit();
+					});
+
+					set[direction](null, lastMigrationNum);
 				});
-
-				//Revert working directory to previous state
-				process.chdir(previousWorkingDirectory);
-
-				var set = migrate();
-
-				set.on('migration', function(migration, direction){
-					log(direction, migration.title);
-				});
-
-				set.on('save', function(){
-					log('migration', 'complete');
-					process.exit();
-				});
-
-				set[direction](null, lastMigrationNum);
 			});
-		});
+		} else {
+			throw(Error("invalid environment config name: '" + dbProperty + "', check config/migrations.js for valid options"))
+		}
 	}
 
 	// invoke command
@@ -298,6 +302,14 @@ function runMongoMigrate(direction, migrationEnd) {
 	if (!(command in commands)) abort('unknown command "' + command + '"');
 	command = commands[command];
 	command.apply(this, options.args);
+}
+
+function checkDBConfigOK() {
+	if (typeof require(cwd + path.sep + configFileName)[dbProperty] === 'undefined') {
+		return false		
+	} else {
+		return true
+	}
 }
 
 function chdir(dir) {
